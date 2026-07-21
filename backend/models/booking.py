@@ -14,9 +14,13 @@ class Booking(BaseModel):
     adults: int = 0
     kids: int = 0
     totalAmount: float
-    status: str = "pending"  
+    status: str = "pending"
     qrCode: Optional[str] = None
     itinerary: Itinerary = Itinerary()
+    isGroupBooking: bool = False
+    groupType: Optional[str] = None 
+    groupName: Optional[str] = None  
+    headcount: Optional[int] = None
     createdAt: datetime = Field(default_factory=datetime.utcnow)
 
     class Config:
