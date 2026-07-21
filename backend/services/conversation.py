@@ -1,10 +1,11 @@
 from datetime import datetime, timedelta
 from services.nlp import parse_booking_intent
-from database import exhibits_collection, slots_collection,users_collection, bookings_collection, exhibits_collection
+from database import exhibits_collection, slots_collection, users_collection, bookings_collection
 from services.crowd_meter import calculate_crowd_status
 from services.payment import create_mock_payment_order, confirm_mock_payment
 from services.qr_generator import generate_ticket_qr
 from services.itinerary import generate_itinerary
+from services.translator import detect_language, translate_to_english, translate_from_english
 from bson import ObjectId
 
 sessions = {}
@@ -21,14 +22,36 @@ def get_session(user_id: str) -> dict:
         }
     return sessions[user_id]
 
+
 async def handle_message(user_id: str, message: str) -> dict:
     session = get_session(user_id)
+
+    
+    if session["stage"] == "greeting" or session.get("language") == "en":
+        detected = detect_language(message)
+        if detected != "en":
+            session["language"] = detected
+
+    
+    if session["language"] != "en":
+        message = translate_to_english(message, session["language"])
+
+    result = await _process_stage(user_id, session, message)
+
+    
+    if session["language"] != "en" and "reply" in result:
+        result["reply"] = translate_from_english(result["reply"], session["language"])
+
+    return result
+
+
+async def _process_stage(user_id: str, session: dict, message: str) -> dict:
     stage = session["stage"]
 
     if stage == "greeting":
         session["stage"] = "awaiting_intent"
         return {
-            "reply": "Welcome to MuseBot!  I can help you book tickets. What would you like to visit, and when? (e.g. '2 adults 1 kid tomorrow for dinosaur exhibit')",
+            "reply": "Welcome to MuseBot! I can help you book tickets. What would you like to visit, and when? (e.g. '2 adults 1 kid tomorrow for dinosaur exhibit')",
             "stage": session["stage"]
         }
 
@@ -37,7 +60,6 @@ async def handle_message(user_id: str, message: str) -> dict:
         if parsed["intent"] != "book_ticket":
             return {"reply": "I can help you book tickets — try telling me headcount, exhibit, and date.", "stage": stage}
 
-        
         keyword = (parsed.get("exhibit_keyword") or "").lower()
         exhibit = await exhibits_collection.find_one({"name": {"$regex": keyword, "$options": "i"}}) if keyword else None
 
@@ -82,8 +104,9 @@ async def handle_message(user_id: str, message: str) -> dict:
         }
 
     if stage == "awaiting_slot_confirm":
-       
-        slots = await slots_collection.find({"_id": {"$in": [__import__('bson').ObjectId(sid) for sid in session["available_slots"]]}}).to_list(20)
+        slots = await slots_collection.find(
+            {"_id": {"$in": [ObjectId(sid) for sid in session["available_slots"]]}}
+        ).to_list(20)
         chosen = next((s for s in slots if s["startTime"] in message), None)
         if not chosen:
             return {"reply": "Please enter the time exactly as shown, e.g. '10:00'.", "stage": stage}
@@ -141,7 +164,6 @@ async def handle_message(user_id: str, message: str) -> dict:
 
         amount = draft["adults"] * PRICE_PER_ADULT + draft["kids"] * PRICE_PER_KID
 
-        # Generate personalized itinerary
         itinerary_result = generate_itinerary(
             draft["exhibit_name"], draft["itinerary_pref"], draft["adults"], draft["kids"]
         )
@@ -179,3 +201,5 @@ async def handle_message(user_id: str, message: str) -> dict:
             "booking_id": booking_id,
             "itinerary": itinerary_result
         }
+
+    return {"reply": "Let's start over — say hi!", "stage": "greeting"}
