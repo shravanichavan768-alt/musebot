@@ -7,6 +7,8 @@ from services.souvenir import generate_visit_badge
 from services.group_pricing import calculate_group_price
 from pydantic import BaseModel as PydanticModel
 from services.qr_generator import generate_ticket_qr
+from pydantic import BaseModel as PydanticModel
+import json as json_lib
 
 router = APIRouter(prefix="/api/bookings", tags=["bookings"])
 class GroupBookingRequest(PydanticModel):
@@ -15,6 +17,9 @@ class GroupBookingRequest(PydanticModel):
     headcount: int
     group_type: str  
     group_name: str
+
+class QRVerifyRequest(PydanticModel):
+    qr_payload: str 
 
 @router.post("/")
 async def create_booking(booking: Booking):
@@ -146,4 +151,39 @@ async def create_group_booking(payload: GroupBookingRequest):
         "headcount": payload.headcount,
         "pricing": pricing,
         "qr_code": qr_code
+    }
+
+@router.post("/verify-qr")
+async def verify_qr(payload: QRVerifyRequest):
+    try:
+        data = json_lib.loads(payload.qr_payload)
+        booking_id = data.get("booking_id")
+    except (json_lib.JSONDecodeError, AttributeError):
+        raise HTTPException(status_code=400, detail="Invalid QR payload")
+
+    if not booking_id or not ObjectId.is_valid(booking_id):
+        raise HTTPException(status_code=400, detail="Invalid booking reference")
+
+    booking = await bookings_collection.find_one({"_id": ObjectId(booking_id)})
+    if not booking:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+
+    if booking["status"] == "checked_in":
+        raise HTTPException(status_code=409, detail="Ticket already used for entry")
+    if booking["status"] == "completed":
+        raise HTTPException(status_code=409, detail="Visit already completed")
+    if booking["status"] != "confirmed":
+        raise HTTPException(status_code=400, detail=f"Ticket not valid for entry (status: {booking['status']})")
+
+    await bookings_collection.update_one(
+        {"_id": ObjectId(booking_id)},
+        {"$set": {"status": "checked_in"}}
+    )
+
+    return {
+        "valid": True,
+        "booking_id": booking_id,
+        "adults": booking["adults"],
+        "kids": booking["kids"],
+        "status": "checked_in"
     }
