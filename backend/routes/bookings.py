@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException,Depends
 from bson import ObjectId
 from database import bookings_collection,slots_collection, users_collection, exhibits_collection
 from models.booking import Booking
@@ -10,6 +10,7 @@ from services.qr_generator import generate_ticket_qr
 from pydantic import BaseModel as PydanticModel
 from services.cancellation_policy import calculate_refund_amount
 from services.payment import create_refund
+from services.auth_dependency import get_current_user
 import json as json_lib
 
 router = APIRouter(prefix="/api/bookings", tags=["bookings"])
@@ -24,7 +25,7 @@ class QRVerifyRequest(PydanticModel):
     qr_payload: str 
 
 @router.post("/")
-async def create_booking(booking: Booking):
+async def create_booking(booking: Booking, current_user: dict = Depends(get_current_user)):
     slot = await slots_collection.find_one({"_id": ObjectId(booking.slot)})
     if not slot:
         raise HTTPException(status_code=404, detail="Slot not found")
@@ -34,14 +35,9 @@ async def create_booking(booking: Booking):
     if requested > remaining:
         raise HTTPException(status_code=400, detail=f"Only {remaining} seats left in this slot")
 
-    
-    crowd = calculate_crowd_status(slot["capacity"], slot["booked"])
-    discount_multiplier = 1 - (crowd["discountPercent"] / 100)
-    booking.totalAmount = round(booking.totalAmount * discount_multiplier, 2)
-
     doc = booking.model_dump(by_alias=True, exclude={"id"})
-    doc["user"] = ObjectId(doc["user"])
-    doc["slot"] = ObjectId(doc["slot"])
+    doc["user"] = ObjectId(current_user["sub"])  
+    doc["slot"] = ObjectId(booking.slot)
     result = await bookings_collection.insert_one(doc)
 
     await slots_collection.update_one(
@@ -49,7 +45,7 @@ async def create_booking(booking: Booking):
         {"$inc": {"booked": requested}}
     )
 
-    return {"id": str(result.inserted_id), "status": "pending", "totalAmount": booking.totalAmount}
+    return {"id": str(result.inserted_id), "status": "pending"}
 
 @router.get("/{booking_id}")
 async def get_booking(booking_id: str):
@@ -191,14 +187,16 @@ async def verify_qr(payload: QRVerifyRequest):
     }
 
 @router.post("/{booking_id}/cancel")
-async def cancel_booking(booking_id: str):
+async def cancel_booking(booking_id: str, current_user: dict = Depends(get_current_user)):
     if not ObjectId.is_valid(booking_id):
         raise HTTPException(status_code=400, detail="Invalid booking id")
 
     booking = await bookings_collection.find_one({"_id": ObjectId(booking_id)})
     if not booking:
         raise HTTPException(status_code=404, detail="Booking not found")
-
+    if str(booking["user"]) != current_user["sub"]:
+        raise HTTPException(status_code=403, detail="You can only cancel your own bookings")
+                            
     if booking["status"] in ("cancelled", "checked_in", "completed"):
         raise HTTPException(status_code=409, detail=f"Booking cannot be cancelled (status: {booking['status']})")
 
