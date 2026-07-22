@@ -53,3 +53,31 @@ def send_ticket_email(to_email: str, visitor_name: str, exhibit_name: str, date:
         return {"sent": True}
     except Exception as e:
         return {"sent": False, "reason": str(e)}
+
+def send_otp_email(to_email: str, otp: str):
+    sender_email = os.getenv("SMTP_EMAIL")
+    sender_password = os.getenv("SMTP_PASSWORD")
+
+    msg = MIMEMultipart()
+    msg["Subject"] = "Your MuseBot Login Code"
+    msg["From"] = sender_email
+    msg["To"] = to_email
+
+    body = f"""
+    <html><body style="font-family: Arial, sans-serif;">
+      <h2 style="color: #4F46E5;">Your MuseBot login code</h2>
+      <p>Enter this code to continue:</p>
+      <h1 style="letter-spacing: 4px;">{otp}</h1>
+      <p style="color: #888; font-size: 12px;">This code expires in 10 minutes.</p>
+    </body></html>
+    """
+    msg.attach(MIMEText(body, "html"))
+
+    try:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+            server.starttls()
+            server.login(sender_email, sender_password)
+            server.sendmail(sender_email, to_email, msg.as_string())
+        return {"sent": True}
+    except Exception as e:
+        return {"sent": False, "reason": str(e)}
