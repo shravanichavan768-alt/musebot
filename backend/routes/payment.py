@@ -16,15 +16,29 @@ class VerifyPaymentRequest(BaseModel):
 
 @router.post("/verify")
 async def verify_payment(payload: VerifyPaymentRequest):
+    if not ObjectId.is_valid(payload.booking_id):
+        raise HTTPException(status_code=400, detail="Invalid booking id")
+
+    booking = await bookings_collection.find_one({"_id": ObjectId(payload.booking_id)})
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+
+    if booking["status"] == "confirmed":
+        return {
+            "status": "already_verified",
+            "booking_id": payload.booking_id,
+            "qr_code": booking.get("qrCode"),
+            "itinerary": {"plan": booking.get("itinerary", {}).get("plan", [])}
+        }
+
+    if booking["status"] != "pending":
+        raise HTTPException(status_code=409, detail=f"Booking cannot be verified (status: {booking['status']})")
+
     is_valid = verify_payment_signature(
         payload.razorpay_order_id, payload.razorpay_payment_id, payload.razorpay_signature
     )
     if not is_valid:
         raise HTTPException(status_code=400, detail="Payment verification failed")
-
-    booking = await bookings_collection.find_one({"_id": ObjectId(payload.booking_id)})
-    if not booking:
-        raise HTTPException(status_code=404, detail="Booking not found")
 
     slot = await slots_collection.find_one({"_id": booking["slot"]})
     exhibit = await exhibits_collection.find_one({"_id": slot["exhibit"]}) if slot else None
@@ -36,14 +50,26 @@ async def verify_payment(payload: VerifyPaymentRequest):
         payload.booking_id, exhibit_name, slot["date"] if slot else "", booking["adults"], booking["kids"]
     )
 
-    await bookings_collection.update_one(
-        {"_id": ObjectId(payload.booking_id)},
+    
+    update_result = await bookings_collection.update_one(
+        {"_id": ObjectId(payload.booking_id), "status": "pending"},
         {"$set": {
             "status": "confirmed",
             "qrCode": qr_code,
+            "razorpayPaymentId": payload.razorpay_payment_id,
             "itinerary.plan": itinerary_result["plan"]
         }}
     )
+
+    if update_result.modified_count == 0:
+        
+        fresh = await bookings_collection.find_one({"_id": ObjectId(payload.booking_id)})
+        return {
+            "status": "already_verified",
+            "booking_id": payload.booking_id,
+            "qr_code": fresh.get("qrCode"),
+            "itinerary": {"plan": fresh.get("itinerary", {}).get("plan", [])}
+        }
 
     return {
         "status": "verified",
