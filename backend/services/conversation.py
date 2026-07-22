@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 from services.nlp import parse_booking_intent
 from database import exhibits_collection, slots_collection, users_collection, bookings_collection
 from services.crowd_meter import calculate_crowd_status
-from services.payment import create_mock_payment_order, confirm_mock_payment
+from services.payment import create_payment_order
 from services.qr_generator import generate_ticket_qr
 from services.itinerary import generate_itinerary
 from services.translator import detect_language, translate_to_english, translate_from_english
@@ -132,74 +132,47 @@ async def _process_stage(user_id: str, session: dict, message: str) -> dict:
             draft = session["booking_draft"]
             amount = draft["adults"] * PRICE_PER_ADULT + draft["kids"] * PRICE_PER_KID
 
-            order = create_mock_payment_order(amount)
-            session["pending_order"] = order
+            
+            user_doc = await users_collection.find_one({"telegramChatId": user_id})
+            if not user_doc:
+                user_result = await users_collection.insert_one({
+                    "name": user_id,
+                    "channel": "web",
+                    "telegramChatId": user_id,
+                    "preferredLanguage": session["language"]
+                })
+                user_mongo_id = user_result.inserted_id
+            else:
+                user_mongo_id = user_doc["_id"]
+
+           
+            booking_result = await bookings_collection.insert_one({
+                "user": user_mongo_id,
+                "slot": ObjectId(draft["slot_id"]),
+                "adults": draft["adults"],
+                "kids": draft["kids"],
+                "totalAmount": amount,
+                "status": "pending",
+                "itinerary": {"preferences": [draft["itinerary_pref"]], "plan": []}
+            })
+            booking_id = str(booking_result.inserted_id)
+            session["booking_draft"]["booking_id"] = booking_id
+
+            order = create_payment_order(amount)
             session["stage"] = "payment_pending"
 
             return {
-                "reply": f"Order created for ₹{amount}. Confirming payment...",
+                "reply": f"Order created for ₹{amount}. Complete payment in the popup...",
                 "stage": session["stage"],
                 "action": "initiate_payment",
-                "order": order
+                "order": order,
+                "booking_id": booking_id
             }
         return {"reply": "No worries, let me know when you're ready.", "stage": stage}
 
     if stage == "payment_pending":
-        order = session["pending_order"]
-        payment_result = confirm_mock_payment(order["order_id"])
-
-        draft = session["booking_draft"]
-
-        user_doc = await users_collection.find_one({"telegramChatId": user_id})
-        if not user_doc:
-            user_result = await users_collection.insert_one({
-                "name": user_id,
-                "channel": "web",
-                "telegramChatId": user_id,
-                "preferredLanguage": session["language"]
-            })
-            user_mongo_id = user_result.inserted_id
-        else:
-            user_mongo_id = user_doc["_id"]
-
-        amount = draft["adults"] * PRICE_PER_ADULT + draft["kids"] * PRICE_PER_KID
-
-        itinerary_result = generate_itinerary(
-            draft["exhibit_name"], draft["itinerary_pref"], draft["adults"], draft["kids"]
-        )
-
-        booking_result = await bookings_collection.insert_one({
-            "user": user_mongo_id,
-            "slot": ObjectId(draft["slot_id"]),
-            "adults": draft["adults"],
-            "kids": draft["kids"],
-            "totalAmount": amount,
-            "status": "confirmed",
-            "itinerary": {
-                "preferences": [draft["itinerary_pref"]],
-                "plan": itinerary_result["plan"]
-            }
-        })
-        booking_id = str(booking_result.inserted_id)
-
-        qr_code = generate_ticket_qr(
-            booking_id, draft["exhibit_name"], draft["date"], draft["adults"], draft["kids"]
-        )
-        await bookings_collection.update_one(
-            {"_id": booking_result.inserted_id},
-            {"$set": {"qrCode": qr_code}}
-        )
-
-        session["stage"] = "completed"
-
-        plan_text = "\n".join(f"• {step}" for step in itinerary_result["plan"])
-
+        
         return {
-            "reply": f"🎉 Payment successful! Your ticket for {draft['exhibit_name']} is confirmed.\n\n📍 Your Personalized Visit Plan (~{itinerary_result['estimated_duration_mins']} min):\n{plan_text}\n\nHere's your QR code:",
-            "stage": "completed",
-            "qr_code": qr_code,
-            "booking_id": booking_id,
-            "itinerary": itinerary_result
+            "reply": "Please complete the payment in the popup window. Once done, your ticket will be generated automatically.",
+            "stage": "payment_pending"
         }
-
-    return {"reply": "Let's start over — say hi!", "stage": "greeting"}
