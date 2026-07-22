@@ -8,6 +8,8 @@ from services.group_pricing import calculate_group_price
 from pydantic import BaseModel as PydanticModel
 from services.qr_generator import generate_ticket_qr
 from pydantic import BaseModel as PydanticModel
+from services.cancellation_policy import calculate_refund_amount
+from services.payment import create_refund
 import json as json_lib
 
 router = APIRouter(prefix="/api/bookings", tags=["bookings"])
@@ -186,4 +188,59 @@ async def verify_qr(payload: QRVerifyRequest):
         "adults": booking["adults"],
         "kids": booking["kids"],
         "status": "checked_in"
+    }
+
+@router.post("/{booking_id}/cancel")
+async def cancel_booking(booking_id: str):
+    if not ObjectId.is_valid(booking_id):
+        raise HTTPException(status_code=400, detail="Invalid booking id")
+
+    booking = await bookings_collection.find_one({"_id": ObjectId(booking_id)})
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+
+    if booking["status"] in ("cancelled", "checked_in", "completed"):
+        raise HTTPException(status_code=409, detail=f"Booking cannot be cancelled (status: {booking['status']})")
+
+    if booking["status"] != "confirmed":
+        raise HTTPException(status_code=400, detail="Only confirmed bookings can be cancelled")
+
+    slot = await slots_collection.find_one({"_id": booking["slot"]})
+    visit_date = slot["date"] if slot else None
+
+    policy_result = calculate_refund_amount(booking["totalAmount"], visit_date)
+
+    refund_info = None
+    if policy_result["eligible"] and policy_result["refund_amount"] > 0:
+        payment_id = booking.get("razorpayPaymentId")
+        if payment_id and not payment_id.startswith("pay_mock"):
+            try:
+                refund_info = create_refund(payment_id, policy_result["refund_amount"])
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Refund failed: {str(e)}")
+
+    
+    if slot:
+        headcount = booking["adults"] + booking["kids"]
+        await slots_collection.update_one(
+            {"_id": booking["slot"]},
+            {"$inc": {"booked": -headcount}}
+        )
+
+    await bookings_collection.update_one(
+        {"_id": ObjectId(booking_id)},
+        {"$set": {
+            "status": "cancelled",
+            "refundAmount": policy_result["refund_amount"],
+            "refundReason": policy_result["reason"]
+        }}
+    )
+
+    return {
+        "booking_id": booking_id,
+        "status": "cancelled",
+        "refund_eligible": policy_result["eligible"],
+        "refund_amount": policy_result["refund_amount"],
+        "refund_reason": policy_result["reason"],
+        "refund_details": refund_info
     }

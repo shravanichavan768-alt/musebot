@@ -27,3 +27,14 @@ def verify_payment_signature(order_id: str, payment_id: str, signature: str) -> 
         return True
     except razorpay.errors.SignatureVerificationError:
         return False
+
+def create_refund(payment_id: str, amount: float) -> dict:
+    
+    refund = client.payment.refund(payment_id, {
+        "amount": int(amount * 100)  # paise
+    })
+    return {
+        "refund_id": refund["id"],
+        "status": refund["status"],
+        "amount": amount
+    }
