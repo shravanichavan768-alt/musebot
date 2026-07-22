@@ -132,13 +132,25 @@ async def _process_stage(user_id: str, session: dict, message: str) -> dict:
 
     if stage == "awaiting_itinerary_pref":
         session["booking_draft"]["itinerary_pref"] = message.lower()
-        session["stage"] = "awaiting_payment"
-        draft = session["booking_draft"]
+        session["stage"] = "awaiting_email"
         return {
-            "reply": f"Great! Here's your booking summary:\n- {draft['exhibit_name']}\n- {draft['adults']} adults, {draft['kids']} kids\n- Date: {draft['date']}\n\nReady to pay? (yes/no)",
+            "reply": "Almost done! What's your email address? We'll send your ticket there too.",
             "stage": session["stage"]
         }
 
+    if stage == "awaiting_email":
+        email = message.strip()
+        if "@" not in email or "." not in email:
+            return {"reply": "That doesn't look like a valid email. Please enter a valid email address.", "stage": stage}
+
+        session["booking_draft"]["email"] = email
+        session["stage"] = "awaiting_payment"
+        draft = session["booking_draft"]
+        return {
+            "reply": f"Great! Here's your booking summary:\n- {draft['exhibit_name']}\n- {draft['adults']} adults, {draft['kids']} kids\n- Date: {draft['date']}\n- Email: {email}\n\nReady to pay? (yes/no)",
+            "stage": session["stage"]
+        }
+    
     if stage == "awaiting_payment":
         if "yes" in message.lower():
             draft = session["booking_draft"]
@@ -149,6 +161,7 @@ async def _process_stage(user_id: str, session: dict, message: str) -> dict:
             if not user_doc:
                 user_result = await users_collection.insert_one({
                     "name": user_id,
+                    "email": draft.get("email"),
                     "channel": "web",
                     "telegramChatId": user_id,
                     "preferredLanguage": session["language"]
@@ -156,6 +169,10 @@ async def _process_stage(user_id: str, session: dict, message: str) -> dict:
                 user_mongo_id = user_result.inserted_id
             else:
                 user_mongo_id = user_doc["_id"]
+                await users_collection.update_one(
+                    {"_id": user_mongo_id},
+                    {"$set": {"email": draft.get("email")}}
+                )
 
            
             booking_result = await bookings_collection.insert_one({

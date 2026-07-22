@@ -3,8 +3,9 @@ from pydantic import BaseModel
 from services.payment import verify_payment_signature
 from services.qr_generator import generate_ticket_qr
 from services.itinerary import generate_itinerary
-from database import bookings_collection, slots_collection, exhibits_collection
+from database import bookings_collection, slots_collection, exhibits_collection, users_collection
 from bson import ObjectId
+from services.email_service import send_ticket_email
 
 router = APIRouter(prefix="/api/payment", tags=["payment"])
 
@@ -50,7 +51,6 @@ async def verify_payment(payload: VerifyPaymentRequest):
         payload.booking_id, exhibit_name, slot["date"] if slot else "", booking["adults"], booking["kids"]
     )
 
-    
     update_result = await bookings_collection.update_one(
         {"_id": ObjectId(payload.booking_id), "status": "pending"},
         {"$set": {
@@ -62,7 +62,6 @@ async def verify_payment(payload: VerifyPaymentRequest):
     )
 
     if update_result.modified_count == 0:
-        
         fresh = await bookings_collection.find_one({"_id": ObjectId(payload.booking_id)})
         return {
             "status": "already_verified",
@@ -70,6 +69,17 @@ async def verify_payment(payload: VerifyPaymentRequest):
             "qr_code": fresh.get("qrCode"),
             "itinerary": {"plan": fresh.get("itinerary", {}).get("plan", [])}
         }
+
+    user = await users_collection.find_one({"_id": booking["user"]})
+    if user and user.get("email"):
+        send_ticket_email(
+            to_email=user["email"],
+            visitor_name=user.get("name", "Visitor"),
+            exhibit_name=exhibit_name,
+            date=slot["date"] if slot else "",
+            qr_code_base64=qr_code,
+            itinerary_plan=itinerary_result["plan"]
+        )
 
     return {
         "status": "verified",
