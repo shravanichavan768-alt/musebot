@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 from services.nlp import parse_booking_intent
-from database import exhibits_collection, slots_collection, users_collection, bookings_collection
+from database import exhibits_collection, slots_collection, users_collection, bookings_collection, sessions_collection
 from services.crowd_meter import calculate_crowd_status
 from services.payment import create_payment_order
 from services.qr_generator import generate_ticket_qr
@@ -8,37 +8,49 @@ from services.itinerary import generate_itinerary
 from services.translator import detect_language, translate_to_english, translate_from_english
 from bson import ObjectId
 
-sessions = {}
-
 PRICE_PER_ADULT = 200
 PRICE_PER_KID = 100
 
-def get_session(user_id: str) -> dict:
-    if user_id not in sessions:
-        sessions[user_id] = {
-            "stage": "greeting",
-            "language": "en",
-            "booking_draft": {}
-        }
-    return sessions[user_id]
+DEFAULT_SESSION = {
+    "stage": "greeting",
+    "language": "en",
+    "booking_draft": {},
+    "available_slots": [],
+    "pending_order": None
+}
+
+async def get_session(user_id: str) -> dict:
+    session = await sessions_collection.find_one({"user_id": user_id})
+    if not session:
+        session = {"user_id": user_id, **DEFAULT_SESSION, "updatedAt": datetime.utcnow()}
+        await sessions_collection.insert_one(session)
+    return session
+
+async def save_session(user_id: str, session: dict):
+    session["updatedAt"] = datetime.utcnow()
+    session.pop("_id", None)  
+    await sessions_collection.update_one(
+        {"user_id": user_id},
+        {"$set": session},
+        upsert=True
+    )
 
 
 async def handle_message(user_id: str, message: str) -> dict:
-    session = get_session(user_id)
+    session = await get_session(user_id)
 
-    
     if session["stage"] == "greeting" or session.get("language") == "en":
         detected = detect_language(message)
         if detected != "en":
             session["language"] = detected
 
-    
     if session["language"] != "en":
         message = translate_to_english(message, session["language"])
 
     result = await _process_stage(user_id, session, message)
 
-    
+    await save_session(user_id, session)
+
     if session["language"] != "en" and "reply" in result:
         result["reply"] = translate_from_english(result["reply"], session["language"])
 
