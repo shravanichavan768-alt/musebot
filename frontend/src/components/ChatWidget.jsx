@@ -2,35 +2,114 @@ import { useState, useRef, useEffect } from "react";
 
 const API_BASE = "http://localhost:5000/api";
 
-export default function ChatWidget() {
+export default function ChatWidget({ venueId, venueName = "MuseBot" }) {
+  const [authToken, setAuthToken] = useState(null);
+  const [authEmail, setAuthEmail] = useState("");
+  const [otpInput, setOtpInput] = useState("");
+  const [authStep, setAuthStep] = useState("email");
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState("");
+
+  const [language, setLanguage] = useState("en");
+  const LANGUAGES = {
+    en: "English",
+    hi: "Hindi",
+    mr: "Marathi",
+    ta: "Tamil",
+    te: "Telugu",
+    bn: "Bengali",
+    gu: "Gujarati",
+    kn: "Kannada",
+  };
+
   const [messages, setMessages] = useState([
     {
       sender: "bot",
-      text: "Hi! Say 'hi' to start booking your museum tickets 🏛️",
+      text: `Hi! Say 'hi' to start booking your tickets for ${venueName} 🎟️`,
     },
   ]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const userId = useRef("web_" + Math.random().toString(36).slice(2, 10));
   const scrollRef = useRef(null);
 
   useEffect(() => {
     scrollRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  const requestOtp = async () => {
+    if (!authEmail.trim()) return;
+    setAuthLoading(true);
+    setAuthError("");
+    try {
+      const res = await fetch(`${API_BASE}/auth/request-otp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: authEmail.trim() }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || "Failed to send OTP");
+      }
+      setAuthStep("otp");
+    } catch (err) {
+      setAuthError(err.message);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const verifyOtp = async () => {
+    if (!otpInput.trim()) return;
+    setAuthLoading(true);
+    setAuthError("");
+    try {
+      const res = await fetch(`${API_BASE}/auth/verify-otp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: authEmail.trim(), otp: otpInput.trim() }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || "Invalid OTP");
+      }
+      const data = await res.json();
+      setAuthToken(data.access_token);
+      setAuthStep("done");
+    } catch (err) {
+      setAuthError(err.message);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const changeLanguage = async (lang) => {
+    setLanguage(lang);
+    await fetch(`${API_BASE}/chat/set-language`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${authToken}`,
+      },
+      body: JSON.stringify({ language: lang }),
+    });
+  };
+
   const openRazorpayCheckout = (order, bookingId) => {
     const options = {
       key: order.razorpay_key_id,
       amount: order.amount * 100,
       currency: order.currency,
-      name: "MuseBot",
-      description: "Museum Ticket Booking",
+      name: venueName,
+      description: "Ticket Booking",
       order_id: order.order_id,
       handler: async function (response) {
         try {
           const verifyRes = await fetch(`${API_BASE}/payment/verify`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${authToken}`,
+            },
             body: JSON.stringify({
               booking_id: bookingId,
               razorpay_order_id: response.razorpay_order_id,
@@ -51,16 +130,11 @@ export default function ChatWidget() {
             return;
           }
 
-          const plan = verifyData.itinerary?.plan?.length
-            ? "\n\n📍 Your Personalized Visit Plan:\n" +
-              verifyData.itinerary.plan.map((s) => `• ${s}`).join("\n")
-            : "";
-
           setMessages((prev) => [
             ...prev,
             {
               sender: "bot",
-              text: `🎉 Payment successful! Your ticket is confirmed.${plan}\n\nHere's your QR code:`,
+              text: verifyData.message || "🎉 Payment successful!",
               qr_code: verifyData.qr_code,
             },
           ]);
@@ -101,11 +175,24 @@ export default function ChatWidget() {
     try {
       const res = await fetch(`${API_BASE}/chat/message`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id: userId.current, message: userMsg }),
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({ message: userMsg, venue_id: venueId }),
       });
-      const data = await res.json();
 
+      if (res.status === 401) {
+        setMessages((prev) => [
+          ...prev,
+          { sender: "bot", text: "Your session expired. Please log in again." },
+        ]);
+        setAuthToken(null);
+        setAuthStep("email");
+        return;
+      }
+
+      const data = await res.json();
       setMessages((prev) => [
         ...prev,
         { sender: "bot", text: data.reply, qr_code: data.qr_code },
@@ -124,14 +211,94 @@ export default function ChatWidget() {
     }
   };
 
-  const handleKeyDown = (e) => {
-    if (e.key === "Enter") sendMessage();
+  const handleKeyDown = (e, action) => {
+    if (e.key === "Enter") action();
   };
+
+  if (authStep !== "done") {
+    return (
+      <div className="flex flex-col h-[600px] w-[380px] border rounded-xl shadow-lg bg-white">
+        <div className="bg-indigo-600 text-white p-4 rounded-t-xl font-semibold">
+          🎟️ {venueName}
+        </div>
+        <div className="flex-1 flex flex-col justify-center items-center p-6 gap-4">
+          {authStep === "email" && (
+            <>
+              <p className="text-sm text-gray-600 text-center">
+                Enter your email to get started
+              </p>
+              <input
+                type="email"
+                className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                placeholder="you@example.com"
+                value={authEmail}
+                onChange={(e) => setAuthEmail(e.target.value)}
+                onKeyDown={(e) => handleKeyDown(e, requestOtp)}
+              />
+              <button
+                onClick={requestOtp}
+                disabled={authLoading}
+                className="w-full bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
+              >
+                {authLoading ? "Sending..." : "Send Code"}
+              </button>
+            </>
+          )}
+          {authStep === "otp" && (
+            <>
+              <p className="text-sm text-gray-600 text-center">
+                Enter the code sent to {authEmail}
+              </p>
+              <input
+                type="text"
+                maxLength={6}
+                className="w-full border rounded-lg px-3 py-2 text-sm text-center tracking-widest focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                placeholder="123456"
+                value={otpInput}
+                onChange={(e) => setOtpInput(e.target.value)}
+                onKeyDown={(e) => handleKeyDown(e, verifyOtp)}
+              />
+              <button
+                onClick={verifyOtp}
+                disabled={authLoading}
+                className="w-full bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
+              >
+                {authLoading ? "Verifying..." : "Verify"}
+              </button>
+              <button
+                onClick={() => {
+                  setAuthStep("email");
+                  setAuthError("");
+                }}
+                className="text-xs text-gray-400 hover:text-gray-600"
+              >
+                Use a different email
+              </button>
+            </>
+          )}
+          {authError && (
+            <p className="text-xs text-red-500 text-center">{authError}</p>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col h-[600px] w-[380px] border rounded-xl shadow-lg bg-white">
-      <div className="bg-indigo-600 text-white p-4 rounded-t-xl font-semibold">
-        🏛️ MuseBot
+      <div className="bg-indigo-600 text-white p-4 rounded-t-xl font-semibold flex justify-between items-center">
+        <span>🎟️ {venueName}</span>
+        <select
+          value={language}
+          onChange={(e) => changeLanguage(e.target.value)}
+          className="text-xs text-indigo-900 rounded px-1 py-0.5"
+        >
+          {Object.entries(LANGUAGES).map(([code, name]) => (
+            <option key={code} value={code}>
+              {name}
+            </option>
+          ))}
+        </select>
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
@@ -158,9 +325,7 @@ export default function ChatWidget() {
             </div>
           </div>
         ))}
-        {loading && (
-          <div className="text-xs text-gray-400">MuseBot is typing...</div>
-        )}
+        {loading && <div className="text-xs text-gray-400">Typing...</div>}
         <div ref={scrollRef} />
       </div>
 
@@ -170,7 +335,7 @@ export default function ChatWidget() {
           placeholder="Type your message..."
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          onKeyDown={handleKeyDown}
+          onKeyDown={(e) => handleKeyDown(e, sendMessage)}
         />
         <button
           onClick={sendMessage}

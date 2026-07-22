@@ -4,11 +4,12 @@ from models.py_object_id import PyObjectId
 
 class Exhibit(BaseModel):
     id: Optional[PyObjectId] = Field(alias="_id", default=None)
+    venueId: PyObjectId
     name: str
-    type: str  # general | special | guided_tour | planetarium
+    type: str
     description: Optional[str] = None
     basePrice: float
-    category: str  # history | art | science | kids
+    category: str
     active: bool = True
 
     class Config:

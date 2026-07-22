@@ -36,13 +36,18 @@ async def save_session(user_id: str, session: dict):
     )
 
 
-async def handle_message(user_id: str, message: str) -> dict:
+async def handle_message(user_id: str, message: str,venue_id:str) -> dict:
     session = await get_session(user_id)
+    session["venueId"] = venue_id  
 
     if session["stage"] == "greeting" or session.get("language") == "en":
         detected = detect_language(message)
-        if detected != "en":
+        if detected != "en" and detected != session.get("language"):
             session["language"] = detected
+            await users_collection.update_one(
+                {"telegramChatId": user_id},
+                {"$set": {"preferredLanguage": detected}}
+            )
 
     if session["language"] != "en":
         message = translate_to_english(message, session["language"])
@@ -59,6 +64,7 @@ async def handle_message(user_id: str, message: str) -> dict:
 
 async def _process_stage(user_id: str, session: dict, message: str) -> dict:
     stage = session["stage"]
+    venue_id = session.get("venueId")
 
     if stage == "greeting":
         session["stage"] = "awaiting_intent"
@@ -73,7 +79,7 @@ async def _process_stage(user_id: str, session: dict, message: str) -> dict:
             return {"reply": "I can help you book tickets — try telling me headcount, exhibit, and date.", "stage": stage}
 
         keyword = (parsed.get("exhibit_keyword") or "").lower()
-        exhibit = await exhibits_collection.find_one({"name": {"$regex": keyword, "$options": "i"}}) if keyword else None
+        exhibit = await exhibits_collection.find_one({"name": {"$regex": keyword, "$options": "i"},"venueId": ObjectId(venue_id)}) if keyword else None
 
         if not exhibit:
             return {"reply": f"I couldn't find an exhibit matching '{keyword}'. Could you rephrase?", "stage": stage}
@@ -177,6 +183,7 @@ async def _process_stage(user_id: str, session: dict, message: str) -> dict:
            
             booking_result = await bookings_collection.insert_one({
                 "user": user_mongo_id,
+                "venueId": ObjectId(venue_id),
                 "slot": ObjectId(draft["slot_id"]),
                 "adults": draft["adults"],
                 "kids": draft["kids"],

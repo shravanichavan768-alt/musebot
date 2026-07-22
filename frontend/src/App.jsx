@@ -1,10 +1,14 @@
-import ChatWidget from './components/ChatWidget';
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import VenuePage from './components/VenuePage';
 
 function App() {
   return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-      <ChatWidget />
-    </div>
+    <BrowserRouter>
+      <Routes>
+        <Route path="/venue/:slug" element={<VenuePage />} />
+        <Route path="*" element={<div className="min-h-screen flex items-center justify-center text-gray-500">Visit /venue/&lt;slug&gt; to open a venue's chatbot</div>} />
+      </Routes>
+    </BrowserRouter>
   );
 }
 

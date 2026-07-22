@@ -9,6 +9,7 @@ class Itinerary(BaseModel):
 
 class Booking(BaseModel):
     id: Optional[PyObjectId] = Field(alias="_id", default=None)
+    venueId: PyObjectId
     user: PyObjectId
     slot: PyObjectId
     adults: int = 0
@@ -18,8 +19,8 @@ class Booking(BaseModel):
     qrCode: Optional[str] = None
     itinerary: Itinerary = Itinerary()
     isGroupBooking: bool = False
-    groupType: Optional[str] = None 
-    groupName: Optional[str] = None  
+    groupType: Optional[str] = None
+    groupName: Optional[str] = None
     headcount: Optional[int] = None
     createdAt: datetime = Field(default_factory=datetime.utcnow)
 
