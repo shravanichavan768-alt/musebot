@@ -10,7 +10,7 @@ router = APIRouter(prefix="/api/slots", tags=["slots"])
 async def get_slots(exhibit_id: str = None, date: str = None):
     query = {}
     if exhibit_id:
-        query["exhibit"] = exhibit_id
+        query["exhibit"] = ObjectId(exhibit_id)
     if date:
         query["date"] = date
     slots = await slots_collection.find(query).to_list(200)
