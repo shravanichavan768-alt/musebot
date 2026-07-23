@@ -22,6 +22,8 @@ class Booking(BaseModel):
     groupType: Optional[str] = None
     groupName: Optional[str] = None
     headcount: Optional[int] = None
+    feedbackRating: Optional[int] = None
+    feedbackComment: Optional[str] = None
     createdAt: datetime = Field(default_factory=datetime.utcnow)
 
     class Config:
