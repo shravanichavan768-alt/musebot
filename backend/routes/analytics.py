@@ -1,12 +1,19 @@
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, HTTPException, Depends
 from database import bookings_collection, slots_collection, exhibits_collection
 from bson import ObjectId
+from services.auth_dependency import get_current_admin
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 
 
+async def verify_venue_admin(venue_id: str, current_admin: dict = Depends(get_current_admin)):
+    if current_admin["venueId"] != venue_id:
+        raise HTTPException(status_code=403, detail="Not authorized for this venue")
+    return current_admin
+
+
 @router.get("/summary")
-async def get_summary(venue_id: str = Query(...)):
+async def get_summary(venue_id: str = Query(...), _admin: dict = Depends(verify_venue_admin)):
     venue_oid = ObjectId(venue_id)
 
     total_bookings = await bookings_collection.count_documents({"venueId": venue_oid})
@@ -54,7 +61,7 @@ async def get_summary(venue_id: str = Query(...)):
 
 
 @router.get("/popular-exhibits")
-async def popular_exhibits(venue_id: str = Query(...)):
+async def popular_exhibits(venue_id: str = Query(...), _admin: dict = Depends(verify_venue_admin)):
     venue_oid = ObjectId(venue_id)
 
     exhibits = await exhibits_collection.find({"venueId": venue_oid}).to_list(100)
@@ -73,7 +80,7 @@ async def popular_exhibits(venue_id: str = Query(...)):
 
 
 @router.get("/peak-hours")
-async def peak_hours(venue_id: str = Query(...)):
+async def peak_hours(venue_id: str = Query(...), _admin: dict = Depends(verify_venue_admin)):
     venue_oid = ObjectId(venue_id)
 
     exhibits = await exhibits_collection.find({"venueId": venue_oid}).to_list(100)
@@ -91,7 +98,7 @@ async def peak_hours(venue_id: str = Query(...)):
 
 
 @router.get("/footfall-trend")
-async def footfall_trend(venue_id: str = Query(...)):
+async def footfall_trend(venue_id: str = Query(...), _admin: dict = Depends(verify_venue_admin)):
     venue_oid = ObjectId(venue_id)
 
     exhibits = await exhibits_collection.find({"venueId": venue_oid}).to_list(100)

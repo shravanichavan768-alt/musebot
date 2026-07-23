@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from routes import exhibits, slots, bookings, users,chat,payment,auth,venues,analytics
+from routes import exhibits, slots, bookings, users,chat,payment,auth,venues,analytics, admin_auth
 
 app = FastAPI(title="MuseBot API")
 
@@ -20,6 +20,7 @@ app.include_router(payment.router)
 app.include_router(auth.router)
 app.include_router(venues.router)
 app.include_router(analytics.router)
+app.include_router(admin_auth.router)
 
 @app.get("/")
 async def root():
