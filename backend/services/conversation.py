@@ -72,10 +72,11 @@ async def _process_stage(user_id: str, session: dict, message: str) -> dict:
         venue = await venues_collection.find_one({"_id": ObjectId(session.get("venueId"))}) if session.get("venueId") else None
         venue_name = venue["name"] if venue else "our venue"
         return {
-            "reply": f"Welcome to {venue_name}! I can help you book tickets. What would you like to visit, and when? (e.g. '2 adults 1 kid tomorrow')",
-            "stage": session["stage"]
+            "reply": f"Welcome to {venue_name}! Fill in the details below to book your tickets.",
+            "stage": session["stage"],
+            "show_booking_form": True
         }
-
+    
     if stage == "awaiting_intent":
         parsed = parse_booking_intent(message)
         if parsed["intent"] != "book_ticket":
