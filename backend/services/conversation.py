@@ -249,6 +249,40 @@ async def handle_message(user_id: str, message: str, venue_id: str) -> dict:
             result["reply"] = translate_from_english(result["reply"], session["language"])
         return result
 
+    if translated_message.strip().lower().startswith("rate "):
+        try:
+            rating = int(translated_message.strip().split(" ")[1])
+            if not (1 <= rating <= 5):
+                raise ValueError()
+        except (ValueError, IndexError):
+            result = {"reply": "Please rate like this: 'rate 5' (1-5 stars)", "stage": session["stage"]}
+            await save_session(user_id, session)
+            if session["language"] != "en" and "reply" in result:
+                result["reply"] = translate_from_english(result["reply"], session["language"])
+            return result
+
+        user_doc = await users_collection.find_one({"telegramChatId": user_id})
+        if not user_doc:
+            result = {"reply": "No booking found to rate.", "stage": session["stage"]}
+        else:
+            booking = await bookings_collection.find_one(
+                {"user": user_doc["_id"], "status": {"$in": ["completed", "checked_in", "confirmed"]}},
+                sort=[("createdAt", -1)]
+            )
+            if not booking:
+                result = {"reply": "No booking found to rate.", "stage": session["stage"]}
+            else:
+                await bookings_collection.update_one(
+                    {"_id": booking["_id"]},
+                    {"$set": {"feedbackRating": rating}}
+                )
+                result = {"reply": f"Thanks for rating us {rating}⭐! We appreciate your feedback.", "stage": session["stage"]}
+
+        await save_session(user_id, session)
+        if session["language"] != "en" and "reply" in result:
+            result["reply"] = translate_from_english(result["reply"], session["language"])
+        return result
+
     result = await _process_stage(user_id, session, translated_message)
 
     await save_session(user_id, session)
