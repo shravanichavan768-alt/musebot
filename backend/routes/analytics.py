@@ -113,3 +113,61 @@ async def footfall_trend(venue_id: str = Query(...), _admin: dict = Depends(veri
 
     result = [{"date": k, "visitors": v} for k, v in sorted(date_bookings.items())]
     return result
+
+@router.get("/revenue-breakdown")
+async def revenue_breakdown(venue_id: str = Query(...), _admin: dict = Depends(verify_venue_admin)):
+    venue_oid = ObjectId(venue_id)
+
+    individual_pipeline = [
+        {"$match": {"venueId": venue_oid, "status": {"$in": ["confirmed", "checked_in", "completed"]}, "isGroupBooking": {"$ne": True}}},
+        {"$group": {"_id": None, "total": {"$sum": "$totalAmount"}, "count": {"$sum": 1}}}
+    ]
+    individual_result = await bookings_collection.aggregate(individual_pipeline).to_list(1)
+
+    group_pipeline = [
+        {"$match": {"venueId": venue_oid, "status": {"$in": ["confirmed", "checked_in", "completed"]}, "isGroupBooking": True}},
+        {"$group": {"_id": None, "total": {"$sum": "$totalAmount"}, "count": {"$sum": 1}}}
+    ]
+    group_result = await bookings_collection.aggregate(group_pipeline).to_list(1)
+
+    refund_pipeline = [
+        {"$match": {"venueId": venue_oid, "status": "cancelled", "refundAmount": {"$gt": 0}}},
+        {"$group": {"_id": None, "total": {"$sum": "$refundAmount"}, "count": {"$sum": 1}}}
+    ]
+    refund_result = await bookings_collection.aggregate(refund_pipeline).to_list(1)
+
+    return {
+        "individual": {
+            "revenue": individual_result[0]["total"] if individual_result else 0,
+            "bookings": individual_result[0]["count"] if individual_result else 0
+        },
+        "group": {
+            "revenue": group_result[0]["total"] if group_result else 0,
+            "bookings": group_result[0]["count"] if group_result else 0
+        },
+        "refunded": {
+            "amount": refund_result[0]["total"] if refund_result else 0,
+            "count": refund_result[0]["count"] if refund_result else 0
+        }
+    }
+
+
+@router.get("/exhibit-revenue")
+async def exhibit_revenue(venue_id: str = Query(...), _admin: dict = Depends(verify_venue_admin)):
+    venue_oid = ObjectId(venue_id)
+
+    exhibits = await exhibits_collection.find({"venueId": venue_oid}).to_list(100)
+    result = []
+    for ex in exhibits:
+        slots = await slots_collection.find({"exhibit": ex["_id"]}).to_list(500)
+        slot_ids = [s["_id"] for s in slots]
+        revenue_pipeline = [
+            {"$match": {"slot": {"$in": slot_ids}, "status": {"$in": ["confirmed", "checked_in", "completed"]}}},
+            {"$group": {"_id": None, "total": {"$sum": "$totalAmount"}}}
+        ]
+        revenue_result = await bookings_collection.aggregate(revenue_pipeline).to_list(1)
+        revenue = revenue_result[0]["total"] if revenue_result else 0
+        result.append({"exhibit_name": ex["name"], "revenue": revenue})
+
+    result.sort(key=lambda x: x["revenue"], reverse=True)
+    return result
