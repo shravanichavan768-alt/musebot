@@ -2,10 +2,11 @@ from datetime import datetime, timedelta
 from services.nlp import parse_booking_intent
 from database import exhibits_collection, slots_collection, users_collection, bookings_collection, sessions_collection,venues_collection
 from services.crowd_meter import calculate_crowd_status
-from services.payment import create_payment_order
+from services.payment import create_payment_order,create_refund
 from services.qr_generator import generate_ticket_qr
 from services.itinerary import generate_itinerary
 from services.translator import detect_language, translate_to_english, translate_from_english
+from services.cancellation_policy import calculate_refund_amount
 from bson import ObjectId
 
 PRICE_PER_ADULT = 200
@@ -226,3 +227,85 @@ async def _process_stage(user_id: str, session: dict, message: str) -> dict:
             "reply": "Please complete the payment in the popup window. Once done, your ticket will be generated automatically.",
             "stage": "payment_pending"
         }
+
+async def handle_message(user_id: str, message: str, venue_id: str) -> dict:
+    session = await get_session(user_id)
+    session["venueId"] = venue_id
+
+    if session["stage"] == "greeting" or session.get("language") == "en":
+        detected = detect_language(message)
+        if detected != "en":
+            session["language"] = detected
+
+    translated_message = message
+    if session["language"] != "en":
+        translated_message = translate_to_english(message, session["language"])
+
+    # Handle cancellation as a global command, works from any stage
+    if translated_message.strip().lower() in ("cancel", "cancel booking", "cancel my booking"):
+        result = await _handle_cancel_request(user_id)
+        await save_session(user_id, session)
+        if session["language"] != "en" and "reply" in result:
+            result["reply"] = translate_from_english(result["reply"], session["language"])
+        return result
+
+    result = await _process_stage(user_id, session, translated_message)
+
+    await save_session(user_id, session)
+
+    if session["language"] != "en" and "reply" in result:
+        result["reply"] = translate_from_english(result["reply"], session["language"])
+
+    return result
+
+
+async def _handle_cancel_request(user_id: str) -> dict:
+    user_doc = await users_collection.find_one({"telegramChatId": user_id})
+    if not user_doc:
+        return {"reply": "You don't have any bookings to cancel.", "stage": "idle"}
+
+    booking = await bookings_collection.find_one(
+        {"user": user_doc["_id"], "status": "confirmed"},
+        sort=[("createdAt", -1)]
+    )
+    if not booking:
+        return {"reply": "You don't have any active confirmed bookings to cancel.", "stage": "idle"}
+
+    slot = await slots_collection.find_one({"_id": booking["slot"]})
+    exhibit = await exhibits_collection.find_one({"_id": slot["exhibit"]}) if slot else None
+    exhibit_name = exhibit["name"] if exhibit else "your booking"
+    visit_date = slot["date"] if slot else None
+
+    policy_result = calculate_refund_amount(booking["totalAmount"], visit_date)
+
+    refund_info = None
+    if policy_result["eligible"] and policy_result["refund_amount"] > 0:
+        payment_id = booking.get("razorpayPaymentId")
+        if payment_id and not payment_id.startswith("pay_mock"):
+            try:
+                refund_info = create_refund(payment_id, policy_result["refund_amount"])
+            except Exception:
+                pass
+
+    if slot:
+        headcount = booking["adults"] + booking["kids"]
+        await slots_collection.update_one(
+            {"_id": booking["slot"]},
+            {"$inc": {"booked": -headcount}}
+        )
+
+    await bookings_collection.update_one(
+        {"_id": booking["_id"]},
+        {"$set": {
+            "status": "cancelled",
+            "refundAmount": policy_result["refund_amount"],
+            "refundReason": policy_result["reason"]
+        }}
+    )
+
+    if policy_result["eligible"]:
+        reply = f"Your booking for {exhibit_name} has been cancelled. Refund of ₹{policy_result['refund_amount']} has been initiated. {policy_result['reason']}"
+    else:
+        reply = f"Your booking for {exhibit_name} has been cancelled. {policy_result['reason']}"
+
+    return {"reply": reply, "stage": "idle", "booking_id": str(booking["_id"])}
