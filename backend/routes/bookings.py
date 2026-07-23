@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException,Depends
 from bson import ObjectId
+from typing import Optional
 from database import bookings_collection,slots_collection, users_collection, exhibits_collection
 from models.booking import Booking
 from services.crowd_meter import calculate_crowd_status
@@ -23,6 +24,10 @@ class GroupBookingRequest(PydanticModel):
 
 class QRVerifyRequest(PydanticModel):
     qr_payload: str 
+
+class FeedbackRequest(PydanticModel):
+    rating: int  
+    comment: Optional[str] = None
 
 @router.post("/")
 async def create_booking(booking: Booking, current_user: dict = Depends(get_current_user)):
@@ -98,7 +103,7 @@ async def checkout(booking_id: str):
         {"$set": {"status": "completed"}}
     )
 
-    return {"id": booking_id, "status": "completed", "badge": badge}
+    return {"id": booking_id, "status": "completed", "badge": badge, "prompt_feedback": True}
 
 
 @router.post("/group")
@@ -242,3 +247,19 @@ async def cancel_booking(booking_id: str, current_user: dict = Depends(get_curre
         "refund_reason": policy_result["reason"],
         "refund_details": refund_info
     }
+
+@router.post("/{booking_id}/feedback")
+async def submit_feedback(booking_id: str, payload: FeedbackRequest):
+    if not ObjectId.is_valid(booking_id):
+        raise HTTPException(status_code=400, detail="Invalid booking id")
+    if not (1 <= payload.rating <= 5):
+        raise HTTPException(status_code=400, detail="Rating must be between 1 and 5")
+
+    result = await bookings_collection.update_one(
+        {"_id": ObjectId(booking_id)},
+        {"$set": {"feedbackRating": payload.rating, "feedbackComment": payload.comment}}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Booking not found")
+
+    return {"booking_id": booking_id, "rating": payload.rating}
