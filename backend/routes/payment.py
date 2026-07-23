@@ -3,10 +3,11 @@ from pydantic import BaseModel
 from services.payment import verify_payment_signature
 from services.qr_generator import generate_ticket_qr
 from services.itinerary import generate_itinerary
-from database import bookings_collection, slots_collection, exhibits_collection, users_collection
+from database import bookings_collection, slots_collection, exhibits_collection, users_collection,venues_collection
 from bson import ObjectId
 from services.email_service import send_ticket_email
 from services.translator import translate_from_english
+from services.bundle_recommender import get_bundle_suggestion
 
 router = APIRouter(prefix="/api/payment", tags=["payment"])
 
@@ -83,7 +84,25 @@ async def verify_payment(payload: VerifyPaymentRequest):
         )
 
     plan_text = "\n".join(f"• {step}" for step in itinerary_result["plan"])
-    success_message = f"🎉 Payment successful! Your ticket is confirmed.\n\n📍 Your Personalized Visit Plan:\n{plan_text}\n\nHere's your QR code:"
+    venue = await venues_collection.find_one({"_id": booking["venueId"]})
+    contact_line = ""
+    if venue:
+        contact_parts = []
+        if venue.get("contactEmail"):
+            contact_parts.append(f"📧 {venue['contactEmail']}")
+        if venue.get("contactPhone"):
+            contact_parts.append(f"📞 {venue['contactPhone']}")
+        if contact_parts:
+            contact_line = f"\n\nFor any queries, reach us at:\n" + "\n".join(contact_parts)
+
+    bundle = await get_bundle_suggestion(booking["venueId"], slot["exhibit"], exhibit.get("category") if exhibit else None)
+    bundle_line = ""
+    if bundle:
+        bundle_line = f"\n\n💡 Since you're visiting, you might also like: {bundle['exhibit_name']} (₹{bundle['base_price']}/person) — want to add it to your visit next time?"
+
+    plan_text = "\n".join(f"• {step}" for step in itinerary_result["plan"])
+    success_message = f"🎉 Payment successful! Your ticket is confirmed.\n\n📍 Your Personalized Visit Plan:\n{plan_text}{contact_line}{bundle_line}\n\nThank you for booking with us! Here's your QR code:"
+    
 
     user_lang = user.get("preferredLanguage", "en") if user else "en"
     if user_lang != "en":
@@ -94,12 +113,6 @@ async def verify_payment(payload: VerifyPaymentRequest):
         "booking_id": payload.booking_id,
         "qr_code": qr_code,
         "itinerary": itinerary_result,
-        "message": success_message
-    }
-
-    return {
-        "status": "verified",
-        "booking_id": payload.booking_id,
-        "qr_code": qr_code,
-        "itinerary": itinerary_result
+        "message": success_message,
+        "show_rating": True  
     }
