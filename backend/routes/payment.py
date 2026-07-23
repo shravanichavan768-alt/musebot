@@ -6,6 +6,7 @@ from services.itinerary import generate_itinerary
 from database import bookings_collection, slots_collection, exhibits_collection, users_collection
 from bson import ObjectId
 from services.email_service import send_ticket_email
+from services.translator import translate_from_english
 
 router = APIRouter(prefix="/api/payment", tags=["payment"])
 
@@ -80,6 +81,21 @@ async def verify_payment(payload: VerifyPaymentRequest):
             qr_code_base64=qr_code,
             itinerary_plan=itinerary_result["plan"]
         )
+
+    plan_text = "\n".join(f"• {step}" for step in itinerary_result["plan"])
+    success_message = f"🎉 Payment successful! Your ticket is confirmed.\n\n📍 Your Personalized Visit Plan:\n{plan_text}\n\nHere's your QR code:"
+
+    user_lang = user.get("preferredLanguage", "en") if user else "en"
+    if user_lang != "en":
+        success_message = translate_from_english(success_message, user_lang)
+
+    return {
+        "status": "verified",
+        "booking_id": payload.booking_id,
+        "qr_code": qr_code,
+        "itinerary": itinerary_result,
+        "message": success_message
+    }
 
     return {
         "status": "verified",
