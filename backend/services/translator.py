@@ -1,7 +1,16 @@
 from deep_translator import GoogleTranslator
 from langdetect import detect, LangDetectException
 
-SUPPORTED_LANGUAGES = {"en": "english", "hi": "hindi", "mr": "marathi"}
+SUPPORTED_LANGUAGES = {
+    "en": "English",
+    "hi": "Hindi",
+    "mr": "Marathi",
+    "ta": "Tamil",
+    "te": "Telugu",
+    "bn": "Bengali",
+    "gu": "Gujarati",
+    "kn": "Kannada"
+}
 
 def detect_language(text: str) -> str:
     try:
