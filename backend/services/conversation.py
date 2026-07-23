@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 from services.nlp import parse_booking_intent
-from database import exhibits_collection, slots_collection, users_collection, bookings_collection, sessions_collection
+from database import exhibits_collection, slots_collection, users_collection, bookings_collection, sessions_collection,venues_collection
 from services.crowd_meter import calculate_crowd_status
 from services.payment import create_payment_order
 from services.qr_generator import generate_ticket_qr
@@ -68,8 +68,10 @@ async def _process_stage(user_id: str, session: dict, message: str) -> dict:
 
     if stage == "greeting":
         session["stage"] = "awaiting_intent"
+        venue = await venues_collection.find_one({"_id": ObjectId(session.get("venueId"))}) if session.get("venueId") else None
+        venue_name = venue["name"] if venue else "our venue"
         return {
-            "reply": "Welcome to MuseBot! I can help you book tickets. What would you like to visit, and when? (e.g. '2 adults 1 kid tomorrow for dinosaur exhibit')",
+            "reply": f"Welcome to {venue_name}! I can help you book tickets. What would you like to visit, and when? (e.g. '2 adults 1 kid tomorrow')",
             "stage": session["stage"]
         }
 
@@ -131,8 +133,20 @@ async def _process_stage(user_id: str, session: dict, message: str) -> dict:
 
         session["booking_draft"]["slot_id"] = str(chosen["_id"])
         session["stage"] = "awaiting_itinerary_pref"
+
+        venue = await venues_collection.find_one({"_id": ObjectId(session.get("venueId"))}) if session.get("venueId") else None
+        venue_type = venue["type"] if venue else "museum"
+
+        pref_options = {
+            "museum": "history / art / science / kids",
+            "national_park": "wildlife / trekking / photography / kids",
+            "heritage_site": "architecture / history / photography / kids",
+            "science_center": "space / robotics / physics / kids"
+        }
+        options_text = pref_options.get(venue_type, "history / art / science / kids")
+
         return {
-            "reply": "Nice choice! Quick question to build your visit plan — what are you most interested in? (history / art / science / kids)",
+            "reply": f"Nice choice! Quick question to build your visit plan — what are you most interested in? ({options_text})",
             "stage": session["stage"]
         }
 
