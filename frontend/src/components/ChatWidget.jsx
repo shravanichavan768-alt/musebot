@@ -136,6 +136,8 @@ export default function ChatWidget({ venueId, venueName = "MuseBot" }) {
               sender: "bot",
               text: verifyData.message || "🎉 Payment successful!",
               qr_code: verifyData.qr_code,
+              showRating: verifyData.show_rating,
+              bookingId: bookingId,
             },
           ]);
         } catch (err) {
@@ -215,6 +217,37 @@ export default function ChatWidget({ venueId, venueName = "MuseBot" }) {
     if (e.key === "Enter") action();
   };
 
+  const startNewConversation = async () => {
+    await fetch(`${API_BASE}/chat/reset`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${authToken}` },
+    });
+    setMessages([
+      {
+        sender: "bot",
+        text: `Hi! Say 'hi' to start booking your tickets for ${venueName} 🎟️`,
+      },
+    ]);
+  };
+
+  const submitRating = async (bookingId, rating, messageIndex) => {
+    try {
+      await fetch(`${API_BASE}/bookings/${bookingId}/feedback`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rating }),
+      });
+      setMessages((prev) =>
+        prev.map((m, i) =>
+          i === messageIndex
+            ? { ...m, showRating: false, ratedValue: rating }
+            : m,
+        ),
+      );
+    } catch (err) {
+      console.error("Rating failed", err);
+    }
+  };
   if (authStep !== "done") {
     return (
       <div className="flex flex-col h-[600px] w-[380px] border rounded-xl shadow-lg bg-white">
@@ -288,17 +321,26 @@ export default function ChatWidget({ venueId, venueName = "MuseBot" }) {
     <div className="flex flex-col h-[600px] w-[380px] border rounded-xl shadow-lg bg-white">
       <div className="bg-indigo-600 text-white p-4 rounded-t-xl font-semibold flex justify-between items-center">
         <span>🎟️ {venueName}</span>
-        <select
-          value={language}
-          onChange={(e) => changeLanguage(e.target.value)}
-          className="text-xs text-indigo-900 rounded px-1 py-0.5"
-        >
-          {Object.entries(LANGUAGES).map(([code, name]) => (
-            <option key={code} value={code}>
-              {name}
-            </option>
-          ))}
-        </select>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={startNewConversation}
+            title="Start new conversation"
+            className="text-xs text-blue-600 bg-white hover:bg-gray-100 rounded px-2 py-1"
+          >
+            ↻ New chat
+          </button>
+          <select
+            value={language}
+            onChange={(e) => changeLanguage(e.target.value)}
+            className="text-xs text-blue-600 bg-white hover:bg-gray-100 rounded px-2 py-1"
+          >
+            {Object.entries(LANGUAGES).map(([code, name]) => (
+              <option key={code} value={code}>
+                {name}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
@@ -321,6 +363,27 @@ export default function ChatWidget({ venueId, venueName = "MuseBot" }) {
                   alt="Ticket QR"
                   className="mt-2 w-40 h-40"
                 />
+              )}
+              {m.showRating && (
+                <div className="mt-3 flex items-center gap-1">
+                  <span className="text-xs text-gray-500 mr-1">
+                    Rate your visit:
+                  </span>
+                  {[1, 2, 3, 4, 5].map((star) => (
+                    <button
+                      key={star}
+                      onClick={() => submitRating(m.bookingId, star, i)}
+                      className="text-xl hover:scale-110 transition-transform"
+                    >
+                      ⭐
+                    </button>
+                  ))}
+                </div>
+              )}
+              {m.ratedValue && (
+                <p className="text-xs text-gray-500 mt-2">
+                  You rated: {"⭐".repeat(m.ratedValue)}
+                </p>
               )}
             </div>
           </div>
